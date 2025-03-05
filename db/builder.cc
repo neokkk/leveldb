@@ -15,7 +15,7 @@
 namespace leveldb {
 
 Status BuildTable(const std::string& dbname, Env* env, const Options& options,
-                  TableCache* table_cache, Iterator* iter, FileMetaData* meta) {
+                  TableCache* table_cache, Iterator* iter, FileMetaData* meta, uint32_t level = 1) {
   Status s;
   meta->file_size = 0;
   iter->SeekToFirst();
@@ -24,13 +24,23 @@ Status BuildTable(const std::string& dbname, Env* env, const Options& options,
   if (iter->Valid()) {
     WritableFile* file;
     s = env->NewWritableFile(fname, &file);
+
     if (!s.ok()) {
+        printf("Fail to make new writable file: %s\n", fname);
       return s;
     }
+
+    //> nk
+    file->fd = env->fd_flsh;
+    file->buffer = env->flsh_buffer; 
+    file->offsetp = &env->offset;
+
+    printf("file->fd: %d, file->buffer: 0x%lx\n", file->fd, (uintptr_t)file->buffer);
 
     TableBuilder* builder = new TableBuilder(options, file);
     meta->smallest.DecodeFrom(iter->key());
     Slice key;
+
     for (; iter->Valid(); iter->Next()) {
       key = iter->key();
       builder->Add(key, iter->value());
@@ -45,6 +55,7 @@ Status BuildTable(const std::string& dbname, Env* env, const Options& options,
       meta->file_size = builder->FileSize();
       assert(meta->file_size > 0);
     }
+
     delete builder;
 
     // Finish and check for file errors

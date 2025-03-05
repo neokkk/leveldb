@@ -162,7 +162,7 @@ class LogTest : public testing::Test {
   class StringDest : public WritableFile {
    public:
     Status Close() override { return Status::OK(); }
-    Status Flush() override { return Status::OK(); }
+    Status Flush(bool direct = false) override { return Status::OK(); }
     Status Sync() override { return Status::OK(); }
     Status Append(const Slice& slice) override {
       contents_.append(slice.data(), slice.size());

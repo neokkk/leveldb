@@ -206,7 +206,7 @@ class WritableFileImpl : public WritableFile {
   Status Append(const Slice& data) override { return file_->Append(data); }
 
   Status Close() override { return Status::OK(); }
-  Status Flush() override { return Status::OK(); }
+  Status Flush(bool direct) override { return Status::OK(); }
   Status Sync() override { return Status::OK(); }
 
  private:

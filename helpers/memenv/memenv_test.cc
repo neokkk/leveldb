@@ -152,7 +152,7 @@ TEST_F(MemEnvTest, Misc) {
 
   // These are no-ops, but we test they return success.
   ASSERT_LEVELDB_OK(writable_file->Sync());
-  ASSERT_LEVELDB_OK(writable_file->Flush());
+  ASSERT_LEVELDB_OK(writable_file->Flush(false));
   ASSERT_LEVELDB_OK(writable_file->Close());
   delete writable_file;
 }

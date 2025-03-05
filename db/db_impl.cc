@@ -8,9 +8,18 @@
 #include <atomic>
 #include <cstdint>
 #include <cstdio>
+#include <locale>
+#include <memory>
 #include <set>
 #include <string>
 #include <vector>
+
+#include <fcntl.h>
+#include <stdlib.h>
+#include <stdio.h>
+#include <string.h>
+#include <sys/mman.h>
+#include <unistd.h>
 
 #include "db/builder.h"
 #include "db/db_iter.h"
@@ -147,16 +156,36 @@ DBImpl::DBImpl(const Options& raw_options, const std::string& dbname)
       background_compaction_scheduled_(false),
       manual_compaction_(nullptr),
       versions_(new VersionSet(dbname_, &options_, table_cache_,
-                               &internal_comparator_)) {}
+                               &internal_comparator_)) {
+    printf("Open DBImpl\n");
+}
 
 DBImpl::~DBImpl() {
   // Wait for background work to finish.
   mutex_.Lock();
   shutting_down_.store(true, std::memory_order_release);
+
+    printf("Destroy DBImpl\n");
+
   while (background_compaction_scheduled_) {
     background_work_finished_signal_.Wait();
   }
+
   mutex_.Unlock();
+
+    //> nk
+    if (env_->fd_flsh) {
+        close(env_->fd_flsh);
+        env_->fd_flsh = 0;
+    }
+
+    if (env_->fd_comp) {
+        close(env_->fd_comp);
+        env_->fd_comp = 0;
+    }
+
+    munmap(env_->flsh_buffer, 8096);
+    munmap(env_->comp_buffer, 8096);
 
   if (db_lock_ != nullptr) {
     env_->UnlockFile(db_lock_);
@@ -477,6 +506,7 @@ Status DBImpl::RecoverLogFile(uint64_t log_number, bool last_log,
     if (env_->GetFileSize(fname, &lfile_size).ok() &&
         env_->NewAppendableFile(fname, &logfile_).ok()) {
       Log(options_.info_log, "Reusing old log %s \n", fname.c_str());
+        logfile_->logged = true;
       log_ = new log::Writer(logfile_, lfile_size);
       logfile_number_ = log_number;
       if (mem != nullptr) {
@@ -513,10 +543,11 @@ Status DBImpl::WriteLevel0Table(MemTable* mem, VersionEdit* edit,
   Log(options_.info_log, "Level-0 table #%llu: started",
       (unsigned long long)meta.number);
 
+    printf("WriteLevel0Table\n");
   Status s;
   {
     mutex_.Unlock();
-    s = BuildTable(dbname_, env_, options_, table_cache_, iter, &meta);
+    s = BuildTable(dbname_, env_, options_, table_cache_, iter, &meta, 0);
     mutex_.Lock();
   }
 
@@ -550,6 +581,28 @@ void DBImpl::CompactMemTable() {
   mutex_.AssertHeld();
   assert(imm_ != nullptr);
 
+    printf("CompactMemTable\n");
+
+    if (!env_->fd_flsh) {
+        int fd_flsh = open("/dev/nvme2n1", O_RDWR);
+        if (fd_flsh < 0) {
+            perror("Fail to open dev for flush\n");
+            goto pass;
+        }
+
+        printf("fd_flsh: %d\n", fd_flsh);
+        void *flsh_buffer = mmap(NULL, 8192, PROT_READ | PROT_WRITE, MAP_SHARED, fd_flsh, 0);
+        if (flsh_buffer == MAP_FAILED) {
+            perror("Fail to mmap buffer for flush\n");
+            close(fd_flsh);
+            goto pass;
+        }
+
+        env_->fd_flsh = fd_flsh;
+        env_->flsh_buffer = flsh_buffer;
+    }
+
+pass:
   // Save the contents of the memtable as a new Table
   VersionEdit edit;
   Version* base = versions_->current();
@@ -666,6 +719,8 @@ void DBImpl::RecordBackgroundError(const Status& s) {
 
 void DBImpl::MaybeScheduleCompaction() {
   mutex_.AssertHeld();
+    // printf("MaybeScheduleCompaction\n");
+
   if (background_compaction_scheduled_) {
     // Already scheduled
   } else if (shutting_down_.load(std::memory_order_acquire)) {
@@ -682,12 +737,25 @@ void DBImpl::MaybeScheduleCompaction() {
 }
 
 void DBImpl::BGWork(void* db) {
-  reinterpret_cast<DBImpl*>(db)->BackgroundCall();
+    printf("Init BGWork; tid: %d\n", gettid());
+
+    DBImpl *impl = reinterpret_cast<DBImpl *>(db);
+    impl->num_bgworks++;
+    impl->BackgroundCall();
+
+    //> nk
+    printf("Destroy BGWork; tid: %d\n", gettid());
+    impl->num_bgworks--;
+    // close(impl->env_->fd_flsh);
+    // munmap(impl->env_->flsh_buffer, 8192);
 }
 
 void DBImpl::BackgroundCall() {
   MutexLock l(&mutex_);
+
   assert(background_compaction_scheduled_);
+    printf("num_bgworks: %d\n", num_bgworks);
+
   if (shutting_down_.load(std::memory_order_acquire)) {
     // No more background work when shutting down.
   } else if (!bg_error_.ok()) {
@@ -707,6 +775,7 @@ void DBImpl::BackgroundCall() {
 void DBImpl::BackgroundCompaction() {
   mutex_.AssertHeld();
 
+    printf("BackgroundCompaction\n");
   if (imm_ != nullptr) {
     CompactMemTable();
     return;
@@ -715,13 +784,16 @@ void DBImpl::BackgroundCompaction() {
   Compaction* c;
   bool is_manual = (manual_compaction_ != nullptr);
   InternalKey manual_end;
+
   if (is_manual) {
     ManualCompaction* m = manual_compaction_;
     c = versions_->CompactRange(m->level, m->begin, m->end);
     m->done = (c == nullptr);
+
     if (c != nullptr) {
       manual_end = c->input(0, c->num_input_files(0) - 1)->largest;
     }
+
     Log(options_.info_log,
         "Manual compaction at level-%d from %s .. %s; will stop at %s\n",
         m->level, (m->begin ? m->begin->DebugString().c_str() : "(begin)"),
@@ -738,13 +810,16 @@ void DBImpl::BackgroundCompaction() {
     // Move file to next level
     assert(c->num_input_files(0) == 1);
     FileMetaData* f = c->input(0, 0);
+
     c->edit()->RemoveFile(c->level(), f->number);
     c->edit()->AddFile(c->level() + 1, f->number, f->file_size, f->smallest,
                        f->largest);
+
     status = versions_->LogAndApply(c->edit(), &mutex_);
     if (!status.ok()) {
       RecordBackgroundError(status);
     }
+
     VersionSet::LevelSummaryStorage tmp;
     Log(options_.info_log, "Moved #%lld to level-%d %lld bytes %s: %s\n",
         static_cast<unsigned long long>(f->number), c->level() + 1,
@@ -756,10 +831,12 @@ void DBImpl::BackgroundCompaction() {
     if (!status.ok()) {
       RecordBackgroundError(status);
     }
+
     CleanupCompaction(compact);
     c->ReleaseInputs();
     RemoveObsoleteFiles();
   }
+
   delete c;
 
   if (status.ok()) {
@@ -775,6 +852,7 @@ void DBImpl::BackgroundCompaction() {
     if (!status.ok()) {
       m->done = true;
     }
+
     if (!m->done) {
       // We only compacted part of the requested range.  Update *m
       // to the range that is left to be compacted.
@@ -806,6 +884,9 @@ Status DBImpl::OpenCompactionOutputFile(CompactionState* compact) {
   assert(compact != nullptr);
   assert(compact->builder == nullptr);
   uint64_t file_number;
+
+    printf("OpenCompactionOutputFile\n");
+
   {
     mutex_.Lock();
     file_number = versions_->NewFileNumber();
@@ -821,6 +902,14 @@ Status DBImpl::OpenCompactionOutputFile(CompactionState* compact) {
   // Make the output file
   std::string fname = TableFileName(dbname_, file_number);
   Status s = env_->NewWritableFile(fname, &compact->outfile);
+
+    //> nk
+    if (env_->fd_comp) {
+        compact->outfile->fd = env_->fd_comp;
+        compact->outfile->buffer = env_->comp_buffer;
+        compact->outfile->offsetp = &env_->offset;
+    }
+
   if (s.ok()) {
     compact->builder = new TableBuilder(options_, compact->outfile);
   }
@@ -832,6 +921,8 @@ Status DBImpl::FinishCompactionOutputFile(CompactionState* compact,
   assert(compact != nullptr);
   assert(compact->outfile != nullptr);
   assert(compact->builder != nullptr);
+
+    printf("FinishCompactionOutputFile\n");
 
   const uint64_t output_number = compact->current_output()->number;
   assert(output_number != 0);
@@ -898,6 +989,28 @@ Status DBImpl::DoCompactionWork(CompactionState* compact) {
   const uint64_t start_micros = env_->NowMicros();
   int64_t imm_micros = 0;  // Micros spent doing imm_ compactions
 
+    printf("DoCompactionWork\n");
+    
+    if (!env_->fd_comp) {
+        int fd_comp = open("/dev/nvme2n1", O_RDWR);
+        if (fd_comp < 0) {
+            perror("Fail to open dev for compaction\n");
+            goto pass;
+        }
+
+        printf("fd_comp: %d\n", fd_comp);
+        void *comp_buffer = mmap(NULL, 8192, PROT_READ | PROT_WRITE, MAP_SHARED, fd_comp, 0);
+        if (comp_buffer == MAP_FAILED) {
+            perror("Fail to mmap buffer for compaction\n");
+            close(fd_comp);
+            goto pass;
+        }
+
+        env_->fd_comp = fd_comp;
+        env_->comp_buffer = comp_buffer;       
+    }
+
+pass:
   Log(options_.info_log, "Compacting %d@%d + %d@%d files",
       compact->compaction->num_input_files(0), compact->compaction->level(),
       compact->compaction->num_input_files(1),
@@ -906,6 +1019,7 @@ Status DBImpl::DoCompactionWork(CompactionState* compact) {
   assert(versions_->NumLevelFiles(compact->compaction->level()) > 0);
   assert(compact->builder == nullptr);
   assert(compact->outfile == nullptr);
+
   if (snapshots_.empty()) {
     compact->smallest_snapshot = versions_->LastSequence();
   } else {
@@ -923,16 +1037,19 @@ Status DBImpl::DoCompactionWork(CompactionState* compact) {
   std::string current_user_key;
   bool has_current_user_key = false;
   SequenceNumber last_sequence_for_key = kMaxSequenceNumber;
+
   while (input->Valid() && !shutting_down_.load(std::memory_order_acquire)) {
     // Prioritize immutable compaction work
     if (has_imm_.load(std::memory_order_relaxed)) {
       const uint64_t imm_start = env_->NowMicros();
       mutex_.Lock();
+
       if (imm_ != nullptr) {
         CompactMemTable();
         // Wake up MakeRoomForWrite() if necessary.
         background_work_finished_signal_.SignalAll();
       }
+
       mutex_.Unlock();
       imm_micros += (env_->NowMicros() - imm_start);
     }
@@ -999,6 +1116,7 @@ Status DBImpl::DoCompactionWork(CompactionState* compact) {
           break;
         }
       }
+
       if (compact->builder->NumEntries() == 0) {
         compact->current_output()->smallest.DecodeFrom(key);
       }
@@ -1027,6 +1145,7 @@ Status DBImpl::DoCompactionWork(CompactionState* compact) {
   if (status.ok()) {
     status = input->status();
   }
+
   delete input;
   input = nullptr;
 
@@ -1037,6 +1156,7 @@ Status DBImpl::DoCompactionWork(CompactionState* compact) {
       stats.bytes_read += compact->compaction->input(which, i)->file_size;
     }
   }
+
   for (size_t i = 0; i < compact->outputs.size(); i++) {
     stats.bytes_written += compact->outputs[i].file_size;
   }
@@ -1050,6 +1170,7 @@ Status DBImpl::DoCompactionWork(CompactionState* compact) {
   if (!status.ok()) {
     RecordBackgroundError(status);
   }
+
   VersionSet::LevelSummaryStorage tmp;
   Log(options_.info_log, "compacted to: %s", versions_->LevelSummary(&tmp));
   return status;
@@ -1221,6 +1342,7 @@ Status DBImpl::Write(const WriteOptions& options, WriteBatch* updates) {
   Status status = MakeRoomForWrite(updates == nullptr);
   uint64_t last_sequence = versions_->LastSequence();
   Writer* last_writer = &w;
+
   if (status.ok() && updates != nullptr) {  // nullptr batch is for compactions
     WriteBatch* write_batch = BuildBatchGroup(&last_writer);
     WriteBatchInternal::SetSequence(write_batch, last_sequence + 1);
@@ -1232,7 +1354,7 @@ Status DBImpl::Write(const WriteOptions& options, WriteBatch* updates) {
     // into mem_.
     {
       mutex_.Unlock();
-      status = log_->AddRecord(WriteBatchInternal::Contents(write_batch));
+      status = log_->AddRecord(WriteBatchInternal::Contents(write_batch)); // WAL
       bool sync_error = false;
       if (status.ok() && options.sync) {
         status = logfile_->Sync();
@@ -1332,6 +1454,7 @@ Status DBImpl::MakeRoomForWrite(bool force) {
   assert(!writers_.empty());
   bool allow_delay = !force;
   Status s;
+
   while (true) {
     if (!bg_error_.ok()) {
       // Yield previous error
@@ -1367,6 +1490,7 @@ Status DBImpl::MakeRoomForWrite(bool force) {
       assert(versions_->PrevLogNumber() == 0);
       uint64_t new_log_number = versions_->NewFileNumber();
       WritableFile* lfile = nullptr;
+
       s = env_->NewWritableFile(LogFileName(dbname_, new_log_number), &lfile);
       if (!s.ok()) {
         // Avoid chewing through file number space in a tight loop.
@@ -1390,6 +1514,7 @@ Status DBImpl::MakeRoomForWrite(bool force) {
       delete logfile_;
 
       logfile_ = lfile;
+        lfile->logged = true;
       logfile_number_ = new_log_number;
       log_ = new log::Writer(lfile);
       imm_ = mem_;
@@ -1397,6 +1522,7 @@ Status DBImpl::MakeRoomForWrite(bool force) {
       mem_ = new MemTable(internal_comparator_);
       mem_->Ref();
       force = false;  // Do not force another compaction if have room
+
       MaybeScheduleCompaction();
     }
   }
@@ -1518,6 +1644,7 @@ Status DB::Open(const Options& options, const std::string& dbname, DB** dbptr) {
       edit.SetLogNumber(new_log_number);
       impl->logfile_ = lfile;
       impl->logfile_number_ = new_log_number;
+        lfile->logged = true;
       impl->log_ = new log::Writer(lfile);
       impl->mem_ = new MemTable(impl->internal_comparator_);
       impl->mem_->Ref();

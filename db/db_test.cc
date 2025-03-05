@@ -180,7 +180,7 @@ class SpecialEnv : public EnvWrapper {
         }
         return s;
       }
-      Status Flush() { return base_->Flush(); }
+      Status Flush(bool direct = false) { return base_->Flush(direct); }
       Status Sync() {
         if (env_->data_sync_error_.load(std::memory_order_acquire)) {
           return Status::IOError("simulated data sync error");
@@ -207,7 +207,7 @@ class SpecialEnv : public EnvWrapper {
         }
       }
       Status Close() { return base_->Close(); }
-      Status Flush() { return base_->Flush(); }
+      Status Flush(bool direct = false) { return base_->Flush(direct); }
       Status Sync() {
         if (env_->manifest_sync_error_.load(std::memory_order_acquire)) {
           return Status::IOError("simulated sync error");

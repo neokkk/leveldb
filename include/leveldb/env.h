@@ -216,6 +216,11 @@ class LEVELDB_EXPORT Env {
 
   // Sleep/delay the thread for the prescribed number of micro-seconds.
   virtual void SleepForMicroseconds(int micros) = 0;
+
+    //> nk
+    int fd_flsh = 0, fd_comp = 0;
+    void *flsh_buffer, *comp_buffer;
+    uint64_t offset = 0;
 };
 
 // A file abstraction for reading sequentially through a file
@@ -285,8 +290,14 @@ class LEVELDB_EXPORT WritableFile {
 
   virtual Status Append(const Slice& data) = 0;
   virtual Status Close() = 0;
-  virtual Status Flush() = 0;
+  virtual Status Flush(bool direct) = 0;
   virtual Status Sync() = 0;
+
+    //> nk
+    int fd;
+    void *buffer;
+    uint64_t *offsetp;
+    bool logged = false;
 };
 
 // An interface for writing log messages.

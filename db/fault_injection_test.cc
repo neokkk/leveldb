@@ -112,7 +112,7 @@ class TestWritableFile : public WritableFile {
   ~TestWritableFile() override;
   Status Append(const Slice& data) override;
   Status Close() override;
-  Status Flush() override;
+  Status Flush(bool direct = false) override;
   Status Sync() override;
 
  private:

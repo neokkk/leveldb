@@ -36,6 +36,8 @@
 #include "util/env_posix_test_helper.h"
 #include "util/posix_logger.h"
 
+#include "util/nvme.h"
+
 namespace leveldb {
 
 namespace {
@@ -293,6 +295,7 @@ class PosixWritableFile final : public WritableFile {
   Status Append(const Slice& data) override {
     size_t write_size = data.size();
     const char* write_data = data.data();
+    printf("Append\n");
 
     // Fit as much as possible into buffer.
     size_t copy_size = std::min(write_size, kWritableFileBufferSize - pos_);
@@ -300,12 +303,13 @@ class PosixWritableFile final : public WritableFile {
     write_data += copy_size;
     write_size -= copy_size;
     pos_ += copy_size;
+
     if (write_size == 0) {
       return Status::OK();
     }
 
     // Can't fit in buffer, so need to do at least one write.
-    Status status = FlushBuffer();
+    Status status = FlushBuffer(true);
     if (!status.ok()) {
       return status;
     }
@@ -316,10 +320,12 @@ class PosixWritableFile final : public WritableFile {
       pos_ = write_size;
       return Status::OK();
     }
-    return WriteUnbuffered(write_data, write_size);
+
+    return WriteUnbuffered(write_data, write_size, true);
   }
 
   Status Close() override {
+    printf("Close\n");
     Status status = FlushBuffer();
     const int close_result = ::close(fd_);
     if (close_result < 0 && status.ok()) {
@@ -329,9 +335,13 @@ class PosixWritableFile final : public WritableFile {
     return status;
   }
 
-  Status Flush() override { return FlushBuffer(); }
+  Status Flush(bool direct = false) override {
+    printf("Flush\n");
+    return FlushBuffer(direct);
+  }
 
   Status Sync() override {
+    printf("Sync\n");
     // Ensure new files referred to by the manifest are in the filesystem.
     //
     // This needs to happen before the manifest file is flushed to disk, to
@@ -351,24 +361,60 @@ class PosixWritableFile final : public WritableFile {
   }
 
  private:
-  Status FlushBuffer() {
-    Status status = WriteUnbuffered(buf_, pos_);
+  Status FlushBuffer(bool direct = false) {
+    printf("FlushBuffer; size: %d\n", pos_);
+    Status status = WriteUnbuffered(buf_, pos_, direct);
     pos_ = 0;
     return status;
   }
 
-  Status WriteUnbuffered(const char* data, size_t size) {
+  Status WriteUnbuffered(const char* data, size_t size, bool direct = false) {
+    size_t orig_size = size;
+
+        // printf("WriteUnbuffered; size: %d\n", orig_size);
     while (size > 0) {
       ssize_t write_result = ::write(fd_, data, size);
+
       if (write_result < 0) {
         if (errno == EINTR) {
           continue;  // Retry
         }
         return PosixError(filename_, errno);
       }
+
       data += write_result;
       size -= write_result;
     }
+
+    if (true)
+    // if (!direct)
+        return Status::OK();
+
+    // printf("WriteUnbuffered; fd: %d, buffer addr: 0x%lx, offset: %lld\n", fd, (uintptr_t)buffer, *offsetp);
+
+    //> nk
+    memset(buffer, 0, 8192);
+    memcpy(buffer, data, orig_size);
+
+    uint64_t slba = *offsetp >> 12;
+    uint32_t nlb = (orig_size >> 12) - 1;
+    int dspec = 0, ret;
+
+    struct nvme_passthru_cmd cmd = {
+        .opcode = nvme_cmd_write,
+        .nsid = 1,       // namespace id
+        .addr = (uintptr_t)buffer,  // mmap buffer addr
+        .data_len = orig_size,
+        .cdw10 = slba & 0xffffffff,      // start lba
+        .cdw11 = slba >> 32,
+        .cdw12 = nlb | (FDP_DIR_DTYPE << 20),
+        .cdw13 = dspec << 16,
+    };
+
+    ret = ioctl(fd, NVME_IOCTL_IO_CMD, &cmd);
+    printf("nvme_passthru_cmd ioctl retval: %d\n", ret);
+    *offsetp += orig_size;
+
     return Status::OK();
   }
 
@@ -455,8 +501,8 @@ class PosixWritableFile final : public WritableFile {
   }
 
   // buf_[0, pos_ - 1] contains data to be written to fd_.
-  char buf_[kWritableFileBufferSize];
-  size_t pos_;
+  char buf_[kWritableFileBufferSize], acc_buf_[kWritableFileBufferSize];
+  size_t pos_, acc_pos_;
   int fd_;
 
   const bool is_manifest_;  // True if the file's name starts with MANIFEST.
@@ -572,6 +618,7 @@ class PosixEnv : public Env {
 
   Status NewWritableFile(const std::string& filename,
                          WritableFile** result) override {
+    printf("NewWritableFile; %s\n", filename.c_str());
     int fd = ::open(filename.c_str(),
                     O_TRUNC | O_WRONLY | O_CREAT | kOpenBaseFlags, 0644);
     if (fd < 0) {
@@ -833,6 +880,7 @@ void PosixEnv::Schedule(
 }
 
 void PosixEnv::BackgroundThreadMain() {
+    printf("BackgroundThreadMain\n");
   while (true) {
     background_work_mutex_.Lock();
 
@@ -874,7 +922,8 @@ class SingletonEnv {
 #endif  // !defined(NDEBUG)
     static_assert(sizeof(env_storage_) >= sizeof(EnvType),
                   "env_storage_ will not fit the Env");
-    static_assert(std::is_standard_layout_v<SingletonEnv<EnvType>>);
+    static_assert(std::is_standard_layout<SingletonEnv<EnvType>>::value,
+                  "SingletonEnv<EnvType> is not a standard layout type");
     static_assert(
         offsetof(SingletonEnv<EnvType>, env_storage_) % alignof(EnvType) == 0,
         "env_storage_ does not meet the Env's alignment needs");

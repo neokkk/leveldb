@@ -18,7 +18,7 @@ class StdoutPrinter : public WritableFile {
     return Status::OK();
   }
   Status Close() override { return Status::OK(); }
-  Status Flush() override { return Status::OK(); }
+  Status Flush(bool direct = false) override { return Status::OK(); }
   Status Sync() override { return Status::OK(); }
 };
 

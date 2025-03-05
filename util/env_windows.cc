@@ -296,7 +296,7 @@ class WindowsWritableFile : public WritableFile {
       pos_ = write_size;
       return Status::OK();
     }
-    return WriteUnbuffered(write_data, write_size);
+    return WriteUnbuffered(write_data, write_size, true);
   }
 
   Status Close() override {
@@ -307,7 +307,7 @@ class WindowsWritableFile : public WritableFile {
     return status;
   }
 
-  Status Flush() override { return FlushBuffer(); }
+  Status Flush(bool direct = false) override { return FlushBuffer(direct); }
 
   Status Sync() override {
     // On Windows no need to sync parent directory. Its metadata will be updated
@@ -326,13 +326,13 @@ class WindowsWritableFile : public WritableFile {
   }
 
  private:
-  Status FlushBuffer() {
-    Status status = WriteUnbuffered(buf_, pos_);
+  Status FlushBuffer(bool direct = false) {
+    Status status = WriteUnbuffered(buf_, pos_, direct);
     pos_ = 0;
     return status;
   }
 
-  Status WriteUnbuffered(const char* data, size_t size) {
+  Status WriteUnbuffered(const char* data, size_t size, bool direct = false) {
     DWORD bytes_written;
     if (!::WriteFile(handle_.get(), data, static_cast<DWORD>(size),
                      &bytes_written, nullptr)) {
@@ -769,7 +769,8 @@ class SingletonEnv {
 #endif  // !defined(NDEBUG)
     static_assert(sizeof(env_storage_) >= sizeof(EnvType),
                   "env_storage_ will not fit the Env");
-    static_assert(std::is_standard_layout_v<SingletonEnv<EnvType>>);
+    static_assert(std::is_standard_layout<SingletonEnv<EnvType>>::value,
+                  "SingletonEnv<EnvType is not a standard layout type");
     static_assert(
         offsetof(SingletonEnv<EnvType>, env_storage_) % alignof(EnvType) == 0,
         "env_storage_ does not meet the Env's alignment needs");

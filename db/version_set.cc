@@ -808,6 +808,7 @@ Status VersionSet::LogAndApply(VersionEdit* edit, port::Mutex* mu) {
     new_manifest_file = DescriptorFileName(dbname_, manifest_file_number_);
     s = env_->NewWritableFile(new_manifest_file, &descriptor_file_);
     if (s.ok()) {
+        descriptor_file_->logged = true;
       descriptor_log_ = new log::Writer(descriptor_file_);
       s = WriteSnapshot(descriptor_log_);
     }
@@ -1017,6 +1018,7 @@ bool VersionSet::ReuseManifest(const std::string& dscname,
   }
 
   Log(options_->info_log, "Reusing MANIFEST %s\n", dscname.c_str());
+    descriptor_file_->logged = true;
   descriptor_log_ = new log::Writer(descriptor_file_, manifest_size);
   manifest_file_number_ = manifest_number;
   return true;

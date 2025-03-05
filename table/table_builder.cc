@@ -125,14 +125,19 @@ void TableBuilder::Add(const Slice& key, const Slice& value) {
 void TableBuilder::Flush() {
   Rep* r = rep_;
   assert(!r->closed);
+
+    printf("TableBuilder::Flush\n");
   if (!ok()) return;
   if (r->data_block.empty()) return;
+
   assert(!r->pending_index_entry);
   WriteBlock(&r->data_block, &r->pending_handle);
+
   if (ok()) {
     r->pending_index_entry = true;
-    r->status = r->file->Flush();
+    r->status = r->file->Flush(true);
   }
+
   if (r->filter_block != nullptr) {
     r->filter_block->StartBlock(r->offset);
   }
@@ -149,6 +154,7 @@ void TableBuilder::WriteBlock(BlockBuilder* block, BlockHandle* handle) {
 
   Slice block_contents;
   CompressionType type = r->options.compression;
+
   // TODO(postrelease): Support more compression options: zlib?
   switch (type) {
     case kNoCompression:
@@ -194,12 +200,16 @@ void TableBuilder::WriteRawBlock(const Slice& block_contents,
   Rep* r = rep_;
   handle->set_offset(r->offset);
   handle->set_size(block_contents.size());
+
+    printf("TableBuilder::WriteRawBlock\n");
+
   r->status = r->file->Append(block_contents);
   if (r->status.ok()) {
     char trailer[kBlockTrailerSize];
     trailer[0] = type;
     uint32_t crc = crc32c::Value(block_contents.data(), block_contents.size());
     crc = crc32c::Extend(crc, trailer, 1);  // Extend crc to cover block type
+        //
     EncodeFixed32(trailer + 1, crc32c::Mask(crc));
     r->status = r->file->Append(Slice(trailer, kBlockTrailerSize));
     if (r->status.ok()) {
@@ -212,7 +222,10 @@ Status TableBuilder::status() const { return rep_->status; }
 
 Status TableBuilder::Finish() {
   Rep* r = rep_;
+
+    printf("TableBuilder::Finish\n");
   Flush();
+
   assert(!r->closed);
   r->closed = true;
 

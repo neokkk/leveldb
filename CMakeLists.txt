@@ -64,7 +64,7 @@ if(CMAKE_CXX_COMPILER_ID STREQUAL "MSVC")
   set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} /GR-")
 else(CMAKE_CXX_COMPILER_ID STREQUAL "MSVC")
   # Enable strict prototype warnings for C code in clang and gcc.
-  if(NOT CMAKE_C_FLAGS MATCHES "-Wstrict-prototypes")
+  if(NOT CMAKE_C_FLAGS MATCHES "-Wstrict-prototypes -g")
     set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -Wstrict-prototypes")
   endif(NOT CMAKE_C_FLAGS MATCHES "-Wstrict-prototypes")
 
