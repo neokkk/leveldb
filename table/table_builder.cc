@@ -126,7 +126,6 @@ void TableBuilder::Flush() {
   Rep* r = rep_;
   assert(!r->closed);
 
-    printf("TableBuilder::Flush\n");
   if (!ok()) return;
   if (r->data_block.empty()) return;
 
@@ -201,8 +200,6 @@ void TableBuilder::WriteRawBlock(const Slice& block_contents,
   handle->set_offset(r->offset);
   handle->set_size(block_contents.size());
 
-    printf("TableBuilder::WriteRawBlock\n");
-
   r->status = r->file->Append(block_contents);
   if (r->status.ok()) {
     char trailer[kBlockTrailerSize];
@@ -223,7 +220,6 @@ Status TableBuilder::status() const { return rep_->status; }
 Status TableBuilder::Finish() {
   Rep* r = rep_;
 
-    printf("TableBuilder::Finish\n");
   Flush();
 
   assert(!r->closed);

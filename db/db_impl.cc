@@ -47,6 +47,7 @@
 namespace leveldb {
 
 const int kNumNonTableCacheFiles = 10;
+const int kWritableFileBufferSize = 65536;
 
 // Information kept for every waiting writer
 struct DBImpl::Writer {
@@ -158,6 +159,26 @@ DBImpl::DBImpl(const Options& raw_options, const std::string& dbname)
       versions_(new VersionSet(dbname_, &options_, table_cache_,
                                &internal_comparator_)) {
     printf("Open DBImpl\n");
+
+    if (!env_->fd_main) {
+        int fd_main = open("/dev/nvme2n1", O_RDWR);
+        if (fd_main < 0) {
+            perror("Fail to open dev for flush\n");
+            return;
+        }
+
+        printf("fd_main: %d\n", fd_main);
+        void *main_buffer = mmap(NULL, kWritableFileBufferSize, PROT_READ | PROT_WRITE, MAP_SHARED, fd_main, 0);
+        if (main_buffer == MAP_FAILED) {
+            perror("Fail to mmap buffer for flush\n");
+            close(fd_main);
+            return;
+        }
+
+        printf("main buffer addr: 0x%lx\n", (uintptr_t)main_buffer);
+        env_->fd_main = fd_main;
+        env_->main_buffer = (char *)main_buffer;
+    }
 }
 
 DBImpl::~DBImpl() {
@@ -174,6 +195,11 @@ DBImpl::~DBImpl() {
   mutex_.Unlock();
 
     //> nk
+    if (env_->fd_main) {
+        close(env_->fd_main);
+        env_->fd_main = 0;
+    }
+
     if (env_->fd_flsh) {
         close(env_->fd_flsh);
         env_->fd_flsh = 0;
@@ -184,8 +210,9 @@ DBImpl::~DBImpl() {
         env_->fd_comp = 0;
     }
 
-    munmap(env_->flsh_buffer, 8096);
-    munmap(env_->comp_buffer, 8096);
+    munmap(env_->main_buffer, kWritableFileBufferSize);
+    munmap(env_->flsh_buffer, kWritableFileBufferSize);
+    munmap(env_->comp_buffer, kWritableFileBufferSize);
 
   if (db_lock_ != nullptr) {
     env_->UnlockFile(db_lock_);
@@ -194,6 +221,7 @@ DBImpl::~DBImpl() {
   delete versions_;
   if (mem_ != nullptr) mem_->Unref();
   if (imm_ != nullptr) imm_->Unref();
+
   delete tmp_batch_;
   delete log_;
   delete logfile_;
@@ -217,14 +245,23 @@ Status DBImpl::NewDB() {
   const std::string manifest = DescriptorFileName(dbname_, 1);
   WritableFile* file;
   Status s = env_->NewWritableFile(manifest, &file);
+
   if (!s.ok()) {
     return s;
   }
+
+    //> nk
+    file->logged = true;
+    file->acc_buf_ = (char *)env_->main_buffer;
+    file->dev_fd_ = env_->fd_main;
+    file->dev_offset_ = &env_->offset;
+
   {
     log::Writer log(file);
     std::string record;
     new_db.EncodeTo(&record);
     s = log.AddRecord(record);
+
     if (s.ok()) {
       s = file->Sync();
     }
@@ -232,13 +269,16 @@ Status DBImpl::NewDB() {
       s = file->Close();
     }
   }
+
   delete file;
+
   if (s.ok()) {
     // Make "CURRENT" file that points to the new manifest file.
     s = SetCurrentFile(env_, dbname_, 1);
   } else {
     env_->RemoveFile(manifest);
   }
+
   return s;
 }
 
@@ -502,13 +542,22 @@ Status DBImpl::RecoverLogFile(uint64_t log_number, bool last_log,
     assert(logfile_ == nullptr);
     assert(log_ == nullptr);
     assert(mem_ == nullptr);
+
     uint64_t lfile_size;
+
     if (env_->GetFileSize(fname, &lfile_size).ok() &&
         env_->NewAppendableFile(fname, &logfile_).ok()) {
       Log(options_.info_log, "Reusing old log %s \n", fname.c_str());
+
+        //> nk
         logfile_->logged = true;
+        logfile_->acc_buf_ = (char *)env_->main_buffer;
+        logfile_->dev_fd_ = env_->fd_main;
+        logfile_->dev_offset_ = &env_->offset;
+
       log_ = new log::Writer(logfile_, lfile_size);
       logfile_number_ = log_number;
+
       if (mem != nullptr) {
         mem_ = mem;
         mem = nullptr;
@@ -537,8 +586,10 @@ Status DBImpl::WriteLevel0Table(MemTable* mem, VersionEdit* edit,
   mutex_.AssertHeld();
   const uint64_t start_micros = env_->NowMicros();
   FileMetaData meta;
+
   meta.number = versions_->NewFileNumber();
   pending_outputs_.insert(meta.number);
+
   Iterator* iter = mem->NewIterator();
   Log(options_.info_log, "Level-0 table #%llu: started",
       (unsigned long long)meta.number);
@@ -583,6 +634,7 @@ void DBImpl::CompactMemTable() {
 
     printf("CompactMemTable\n");
 
+    //> nk
     if (!env_->fd_flsh) {
         int fd_flsh = open("/dev/nvme2n1", O_RDWR);
         if (fd_flsh < 0) {
@@ -591,7 +643,7 @@ void DBImpl::CompactMemTable() {
         }
 
         printf("fd_flsh: %d\n", fd_flsh);
-        void *flsh_buffer = mmap(NULL, 8192, PROT_READ | PROT_WRITE, MAP_SHARED, fd_flsh, 0);
+        void *flsh_buffer = mmap(NULL, kWritableFileBufferSize, PROT_READ | PROT_WRITE, MAP_SHARED, fd_flsh, 0);
         if (flsh_buffer == MAP_FAILED) {
             perror("Fail to mmap buffer for flush\n");
             close(fd_flsh);
@@ -626,6 +678,7 @@ pass:
     imm_->Unref();
     imm_ = nullptr;
     has_imm_.store(false, std::memory_order_release);
+
     RemoveObsoleteFiles();
   } else {
     RecordBackgroundError(s);
@@ -744,8 +797,8 @@ void DBImpl::BGWork(void* db) {
     impl->BackgroundCall();
 
     //> nk
-    printf("Destroy BGWork; tid: %d\n", gettid());
-    impl->num_bgworks--;
+    // printf("Destroy BGWork; tid: %d\n", gettid());
+    // impl->num_bgworks--;
     // close(impl->env_->fd_flsh);
     // munmap(impl->env_->flsh_buffer, 8192);
 }
@@ -903,14 +956,14 @@ Status DBImpl::OpenCompactionOutputFile(CompactionState* compact) {
   std::string fname = TableFileName(dbname_, file_number);
   Status s = env_->NewWritableFile(fname, &compact->outfile);
 
+  if (s.ok()) {
     //> nk
     if (env_->fd_comp) {
-        compact->outfile->fd = env_->fd_comp;
-        compact->outfile->buffer = env_->comp_buffer;
-        compact->outfile->offsetp = &env_->offset;
+        compact->outfile->acc_buf_= (char *)env_->comp_buffer;
+        compact->outfile->dev_fd_ = env_->fd_comp;
+        compact->outfile->dev_offset_= &env_->offset;
     }
 
-  if (s.ok()) {
     compact->builder = new TableBuilder(options_, compact->outfile);
   }
   return s;
@@ -991,6 +1044,7 @@ Status DBImpl::DoCompactionWork(CompactionState* compact) {
 
     printf("DoCompactionWork\n");
     
+    //> nk
     if (!env_->fd_comp) {
         int fd_comp = open("/dev/nvme2n1", O_RDWR);
         if (fd_comp < 0) {
@@ -999,7 +1053,7 @@ Status DBImpl::DoCompactionWork(CompactionState* compact) {
         }
 
         printf("fd_comp: %d\n", fd_comp);
-        void *comp_buffer = mmap(NULL, 8192, PROT_READ | PROT_WRITE, MAP_SHARED, fd_comp, 0);
+        void *comp_buffer = mmap(NULL, kWritableFileBufferSize, PROT_READ | PROT_WRITE, MAP_SHARED, fd_comp, 0);
         if (comp_buffer == MAP_FAILED) {
             perror("Fail to mmap buffer for compaction\n");
             close(fd_comp);
@@ -1492,11 +1546,18 @@ Status DBImpl::MakeRoomForWrite(bool force) {
       WritableFile* lfile = nullptr;
 
       s = env_->NewWritableFile(LogFileName(dbname_, new_log_number), &lfile);
+
       if (!s.ok()) {
         // Avoid chewing through file number space in a tight loop.
         versions_->ReuseFileNumber(new_log_number);
         break;
       }
+
+        //> nk
+        lfile->logged = true;
+        lfile->acc_buf_ = (char *)env_->main_buffer;
+        lfile->dev_fd_ = env_->fd_main;
+        lfile->dev_offset_ = &env_->offset;
 
       delete log_;
 
@@ -1514,7 +1575,13 @@ Status DBImpl::MakeRoomForWrite(bool force) {
       delete logfile_;
 
       logfile_ = lfile;
+
+        //> nk
         lfile->logged = true;
+        lfile->acc_buf_ = (char *)env_->main_buffer;
+        lfile->dev_fd_ = env_->fd_main;
+        lfile->dev_offset_ = &env_->offset;
+
       logfile_number_ = new_log_number;
       log_ = new log::Writer(lfile);
       imm_ = mem_;
@@ -1634,31 +1701,41 @@ Status DB::Open(const Options& options, const std::string& dbname, DB** dbptr) {
   // Recover handles create_if_missing, error_if_exists
   bool save_manifest = false;
   Status s = impl->Recover(&edit, &save_manifest);
+
   if (s.ok() && impl->mem_ == nullptr) {
     // Create new log and a corresponding memtable.
     uint64_t new_log_number = impl->versions_->NewFileNumber();
     WritableFile* lfile;
     s = options.env->NewWritableFile(LogFileName(dbname, new_log_number),
                                      &lfile);
+
     if (s.ok()) {
+        //> nk
+        lfile->logged = true;
+        lfile->acc_buf_ = (char *)impl->env_->main_buffer;
+        lfile->dev_fd_ = impl->env_->fd_main;
+        lfile->dev_offset_ = &impl->env_->offset;
+
       edit.SetLogNumber(new_log_number);
       impl->logfile_ = lfile;
       impl->logfile_number_ = new_log_number;
-        lfile->logged = true;
       impl->log_ = new log::Writer(lfile);
       impl->mem_ = new MemTable(impl->internal_comparator_);
       impl->mem_->Ref();
     }
   }
+
   if (s.ok() && save_manifest) {
     edit.SetPrevLogNumber(0);  // No older logs needed after recovery.
     edit.SetLogNumber(impl->logfile_number_);
     s = impl->versions_->LogAndApply(&edit, &impl->mutex_);
   }
+
   if (s.ok()) {
     impl->RemoveObsoleteFiles();
     impl->MaybeScheduleCompaction();
   }
+
   impl->mutex_.Unlock();
   if (s.ok()) {
     assert(impl->mem_ != nullptr);
@@ -1666,6 +1743,7 @@ Status DB::Open(const Options& options, const std::string& dbname, DB** dbptr) {
   } else {
     delete impl;
   }
+
   return s;
 }
 
@@ -1682,10 +1760,12 @@ Status DestroyDB(const std::string& dbname, const Options& options) {
 
   FileLock* lock;
   const std::string lockname = LockFileName(dbname);
+
   result = env->LockFile(lockname, &lock);
   if (result.ok()) {
     uint64_t number;
     FileType type;
+
     for (size_t i = 0; i < filenames.size(); i++) {
       if (ParseFileName(filenames[i], &number, &type) &&
           type != kDBLockFile) {  // Lock file will be deleted at end
@@ -1695,6 +1775,7 @@ Status DestroyDB(const std::string& dbname, const Options& options) {
         }
       }
     }
+
     env->UnlockFile(lock);  // Ignore error since state is already gone
     env->RemoveFile(lockname);
     env->RemoveDir(dbname);  // Ignore error in case dir contains other files

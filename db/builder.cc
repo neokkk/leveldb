@@ -31,11 +31,11 @@ Status BuildTable(const std::string& dbname, Env* env, const Options& options,
     }
 
     //> nk
-    file->fd = env->fd_flsh;
-    file->buffer = env->flsh_buffer; 
-    file->offsetp = &env->offset;
+    file->acc_buf_ = (char *)env->flsh_buffer; 
+    file->dev_fd_ = env->fd_flsh;
+    file->dev_offset_ = &env->offset;
 
-    printf("file->fd: %d, file->buffer: 0x%lx\n", file->fd, (uintptr_t)file->buffer);
+    printf("file->fd: %d, file->buffer: 0x%lx\n", file->dev_fd_, (uintptr_t)file->acc_buf_);
 
     TableBuilder* builder = new TableBuilder(options, file);
     meta->smallest.DecodeFrom(iter->key());

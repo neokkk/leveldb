@@ -51,20 +51,30 @@ static Status DoWriteStringToFile(Env* env, const Slice& data,
                                   const std::string& fname, bool should_sync) {
   WritableFile* file;
   Status s = env->NewWritableFile(fname, &file);
+   
   if (!s.ok()) {
     return s;
   }
+ 
+    //> nk
+    file->acc_buf_ = (char *)env->main_buffer;
+    file->dev_fd_ = env->fd_main;
+    file->dev_offset_ = &env->offset;
+
   s = file->Append(data);
   if (s.ok() && should_sync) {
     s = file->Sync();
   }
+
   if (s.ok()) {
     s = file->Close();
   }
+
   delete file;  // Will auto-close if we did not close above
   if (!s.ok()) {
     env->RemoveFile(fname);
   }
+
   return s;
 }
 

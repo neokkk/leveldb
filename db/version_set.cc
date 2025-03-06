@@ -795,20 +795,28 @@ Status VersionSet::LogAndApply(VersionEdit* edit, port::Mutex* mu) {
     builder.Apply(edit);
     builder.SaveTo(v);
   }
+
   Finalize(v);
 
   // Initialize new descriptor log file if necessary by creating
   // a temporary file that contains a snapshot of the current version.
   std::string new_manifest_file;
   Status s;
+
   if (descriptor_log_ == nullptr) {
     // No reason to unlock *mu here since we only hit this path in the
     // first call to LogAndApply (when opening the database).
     assert(descriptor_file_ == nullptr);
     new_manifest_file = DescriptorFileName(dbname_, manifest_file_number_);
     s = env_->NewWritableFile(new_manifest_file, &descriptor_file_);
+
     if (s.ok()) {
+        //> nk
         descriptor_file_->logged = true;
+        descriptor_file_->acc_buf_ = (char *)env_->main_buffer;
+        descriptor_file_->dev_fd_ = env_->fd_main;
+        descriptor_file_->dev_offset_ = &env_->offset;
+
       descriptor_log_ = new log::Writer(descriptor_file_);
       s = WriteSnapshot(descriptor_log_);
     }
@@ -1011,14 +1019,20 @@ bool VersionSet::ReuseManifest(const std::string& dscname,
   assert(descriptor_file_ == nullptr);
   assert(descriptor_log_ == nullptr);
   Status r = env_->NewAppendableFile(dscname, &descriptor_file_);
+
   if (!r.ok()) {
     Log(options_->info_log, "Reuse MANIFEST: %s\n", r.ToString().c_str());
     assert(descriptor_file_ == nullptr);
     return false;
   }
 
-  Log(options_->info_log, "Reusing MANIFEST %s\n", dscname.c_str());
+    //> nk
     descriptor_file_->logged = true;
+    descriptor_file_->acc_buf_ = (char *)env_->main_buffer;
+    descriptor_file_->dev_fd_ = env_->fd_main;
+    descriptor_file_->dev_offset_ = &env_->offset;
+
+  Log(options_->info_log, "Reusing MANIFEST %s\n", dscname.c_str());
   descriptor_log_ = new log::Writer(descriptor_file_, manifest_size);
   manifest_file_number_ = manifest_number;
   return true;

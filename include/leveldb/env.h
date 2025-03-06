@@ -218,8 +218,8 @@ class LEVELDB_EXPORT Env {
   virtual void SleepForMicroseconds(int micros) = 0;
 
     //> nk
-    int fd_flsh = 0, fd_comp = 0;
-    void *flsh_buffer, *comp_buffer;
+    int fd_main = 0, fd_flsh = 0, fd_comp = 0;
+    void *main_buffer, *flsh_buffer, *comp_buffer;
     uint64_t offset = 0;
 };
 
@@ -294,9 +294,10 @@ class LEVELDB_EXPORT WritableFile {
   virtual Status Sync() = 0;
 
     //> nk
-    int fd;
-    void *buffer;
-    uint64_t *offsetp;
+    char *acc_buf_;
+    size_t acc_pos_;
+    int dev_fd_;
+    uint64_t *dev_offset_;
     bool logged = false;
 };
 

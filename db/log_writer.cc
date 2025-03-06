@@ -40,9 +40,11 @@ Status Writer::AddRecord(const Slice& slice) {
   // zero-length record
   Status s;
   bool begin = true;
+
   do {
     const int leftover = kBlockSize - block_offset_;
     assert(leftover >= 0);
+
     if (leftover < kHeaderSize) {
       // Switch to a new block
       if (leftover > 0) {
@@ -61,6 +63,7 @@ Status Writer::AddRecord(const Slice& slice) {
 
     RecordType type;
     const bool end = (left == fragment_length);
+
     if (begin && end) {
       type = kFullType;
     } else if (begin) {
@@ -76,6 +79,7 @@ Status Writer::AddRecord(const Slice& slice) {
     left -= fragment_length;
     begin = false;
   } while (s.ok() && left > 0);
+
   return s;
 }
 
@@ -103,6 +107,7 @@ Status Writer::EmitPhysicalRecord(RecordType t, const char* ptr,
       s = dest_->Flush(false);
     }
   }
+
   block_offset_ += kHeaderSize + length;
   return s;
 }

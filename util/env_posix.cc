@@ -283,19 +283,26 @@ class PosixWritableFile final : public WritableFile {
         fd_(fd),
         is_manifest_(IsManifest(filename)),
         filename_(std::move(filename)),
-        dirname_(Dirname(filename_)) {}
+        dirname_(Dirname(filename_)) {
+        acc_pos_ = 0;
+    }
 
   ~PosixWritableFile() override {
+    printf("Destroy PosixWritableFile\n");
     if (fd_ >= 0) {
       // Ignoring any potential errors
       Close();
+    }
+
+    if (dev_fd_ > 0) {
+        WriteDirect(acc_buf_, acc_pos_); // flush
+        acc_pos_ = 0;
     }
   }
 
   Status Append(const Slice& data) override {
     size_t write_size = data.size();
     const char* write_data = data.data();
-    printf("Append\n");
 
     // Fit as much as possible into buffer.
     size_t copy_size = std::min(write_size, kWritableFileBufferSize - pos_);
@@ -326,7 +333,7 @@ class PosixWritableFile final : public WritableFile {
 
   Status Close() override {
     printf("Close\n");
-    Status status = FlushBuffer();
+    Status status = FlushBuffer(true);
     const int close_result = ::close(fd_);
     if (close_result < 0 && status.ok()) {
       status = PosixError(filename_, errno);
@@ -336,12 +343,10 @@ class PosixWritableFile final : public WritableFile {
   }
 
   Status Flush(bool direct = false) override {
-    printf("Flush\n");
     return FlushBuffer(direct);
   }
 
   Status Sync() override {
-    printf("Sync\n");
     // Ensure new files referred to by the manifest are in the filesystem.
     //
     // This needs to happen before the manifest file is flushed to disk, to
@@ -352,7 +357,7 @@ class PosixWritableFile final : public WritableFile {
       return status;
     }
 
-    status = FlushBuffer();
+    status = FlushBuffer(true);
     if (!status.ok()) {
       return status;
     }
@@ -362,16 +367,52 @@ class PosixWritableFile final : public WritableFile {
 
  private:
   Status FlushBuffer(bool direct = false) {
-    printf("FlushBuffer; size: %d\n", pos_);
     Status status = WriteUnbuffered(buf_, pos_, direct);
     pos_ = 0;
     return status;
   }
 
-  Status WriteUnbuffered(const char* data, size_t size, bool direct = false) {
-    size_t orig_size = size;
+    //> nk
+    void WriteDirect(const char *data, size_t size) {
+        if (size < 1) return;
+        if (dev_fd_ < 1) {
+            printf("no dev_fd; fd: %d\n", dev_fd_);
+            return;
+        }
+        printf("WriteDirect; buf addr: 0x%lx, fd: %d, size: %d, offset: %lld\n", (uintptr_t)data, dev_fd_, size, *dev_offset_);
 
-        // printf("WriteUnbuffered; size: %d\n", orig_size);
+        //> nk
+        uint64_t slba = *dev_offset_ >> 12;
+        uint32_t nlb = (size >> 12) - 1;
+        int dspec = 0, ret;
+
+        struct nvme_passthru_cmd cmd = {
+            .opcode = nvme_cmd_write,
+            .nsid = 1,       // namespace id
+            .addr =  (uintptr_t)data,  // mmap buffer addr
+            .data_len = size,
+            .cdw10 = slba & 0xffffffff,      // start lba
+            .cdw11 = slba >> 32,
+            .cdw12 = nlb | (FDP_DIR_DTYPE << 20),
+            .cdw13 = dspec << 16,
+        };
+
+        ret = ioctl(dev_fd_, NVME_IOCTL_IO_CMD, &cmd);
+        printf("nvme_passthru_cmd ioctl retval: %d\n", ret);
+        *dev_offset_ += size;
+    }
+
+  Status WriteUnbuffered(const char* data, size_t size, bool direct = false) {
+    //> nk: accumulate buffer
+    if (acc_pos_ + pos_ > kWritableFileBufferSize) {
+        WriteDirect(acc_buf_, acc_pos_);
+        acc_pos_ = 0;
+    }
+
+    memcpy(acc_buf_, data, size);
+    acc_pos_ += size;
+
+    // printf("WriteUnbuffered; %s (%d)\n", filename_, size);
     while (size > 0) {
       ssize_t write_result = ::write(fd_, data, size);
 
@@ -385,35 +426,6 @@ class PosixWritableFile final : public WritableFile {
       data += write_result;
       size -= write_result;
     }
-
-    if (true)
-    // if (!direct)
-        return Status::OK();
-
-    // printf("WriteUnbuffered; fd: %d, buffer addr: 0x%lx, offset: %lld\n", fd, (uintptr_t)buffer, *offsetp);
-
-    //> nk
-    memset(buffer, 0, 8192);
-    memcpy(buffer, data, orig_size);
-
-    uint64_t slba = *offsetp >> 12;
-    uint32_t nlb = (orig_size >> 12) - 1;
-    int dspec = 0, ret;
-
-    struct nvme_passthru_cmd cmd = {
-        .opcode = nvme_cmd_write,
-        .nsid = 1,       // namespace id
-        .addr = (uintptr_t)buffer,  // mmap buffer addr
-        .data_len = orig_size,
-        .cdw10 = slba & 0xffffffff,      // start lba
-        .cdw11 = slba >> 32,
-        .cdw12 = nlb | (FDP_DIR_DTYPE << 20),
-        .cdw13 = dspec << 16,
-    };
-
-    ret = ioctl(fd, NVME_IOCTL_IO_CMD, &cmd);
-    printf("nvme_passthru_cmd ioctl retval: %d\n", ret);
-    *offsetp += orig_size;
 
     return Status::OK();
   }
@@ -501,8 +513,8 @@ class PosixWritableFile final : public WritableFile {
   }
 
   // buf_[0, pos_ - 1] contains data to be written to fd_.
-  char buf_[kWritableFileBufferSize], acc_buf_[kWritableFileBufferSize];
-  size_t pos_, acc_pos_;
+  char buf_[kWritableFileBufferSize];
+  size_t pos_;
   int fd_;
 
   const bool is_manifest_;  // True if the file's name starts with MANIFEST.
