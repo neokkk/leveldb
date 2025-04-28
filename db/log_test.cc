@@ -164,6 +164,7 @@ class LogTest : public testing::Test {
     Status Close() override { return Status::OK(); }
     Status Flush() override { return Status::OK(); }
     Status Sync() override { return Status::OK(); }
+    int Fcntl(int cmd, ...) override { return 0; }
     Status Append(const Slice& slice) override {
       contents_.append(slice.data(), slice.size());
       return Status::OK();
@@ -204,6 +205,8 @@ class LogTest : public testing::Test {
 
       return Status::OK();
     }
+
+    int Fcntl(int cmd, ...) override { return 0; }
 
     Slice contents_;
     bool force_error_;

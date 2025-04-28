@@ -246,6 +246,7 @@ class LEVELDB_EXPORT SequentialFile {
   //
   // REQUIRES: External synchronization
   virtual Status Skip(uint64_t n) = 0;
+    virtual int Fcntl(int cmd, ...) = 0;
 };
 
 // A file abstraction for randomly reading the contents of a file.
@@ -287,6 +288,7 @@ class LEVELDB_EXPORT WritableFile {
   virtual Status Close() = 0;
   virtual Status Flush() = 0;
   virtual Status Sync() = 0;
+    virtual int Fcntl(int cmd, ...) = 0;
 };
 
 // An interface for writing log messages.
