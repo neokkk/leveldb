@@ -190,8 +190,6 @@ class SpecialEnv : public EnvWrapper {
         }
         return base_->Sync();
       }
-
-        int Fcntl(int cmd, ...) { return 0; }
     };
     class ManifestFile : public WritableFile {
      private:
@@ -217,7 +215,6 @@ class SpecialEnv : public EnvWrapper {
           return base_->Sync();
         }
       }
-      int Fcntl(int cmd, ...) { return 0; }
     };
 
     if (non_writable_.load(std::memory_order_acquire)) {

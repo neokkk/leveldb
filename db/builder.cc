@@ -2,9 +2,6 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file. See the AUTHORS file for names of contributors.
 
-#include <fcntl.h>
-#include <stdio.h>
-
 #include "db/builder.h"
 
 #include "db/dbformat.h"
@@ -20,8 +17,6 @@ namespace leveldb {
 Status BuildTable(const std::string& dbname, Env* env, const Options& options,
                   TableCache* table_cache, Iterator* iter, FileMetaData* meta) {
   Status s;
-    int ret;
-
   meta->file_size = 0;
   iter->SeekToFirst();
 
@@ -32,8 +27,6 @@ Status BuildTable(const std::string& dbname, Env* env, const Options& options,
     if (!s.ok()) {
       return s;
     }
-
-    ret = file->Fcntl(F_SET_RW_HINT, 1);
 
     TableBuilder* builder = new TableBuilder(options, file);
     meta->smallest.DecodeFrom(iter->key());

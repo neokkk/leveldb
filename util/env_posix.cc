@@ -163,27 +163,6 @@ class PosixSequentialFile final : public SequentialFile {
     return Status::OK();
   }
 
-    int Fcntl(int cmd, ...) override {
-        va_list args;
-        int ret;
-
-        va_start(args, cmd);
-
-        switch (cmd) {
-            case F_SET_RW_HINT: {
-                uint64_t hint = va_arg(args, uint64_t);
-                ret = ::fcntl(fd_, cmd, &hint);
-                break;
-            }
-            default:
-                ret = ::fcntl(fd_, cmd);
-                break;
-        }
-
-        va_end(args);
-        return ret;
-    }
-
  private:
   const int fd_;
   const std::string filename_;
@@ -376,27 +355,6 @@ class PosixWritableFile final : public WritableFile {
 
     return SyncFd(fd_, filename_);
   }
-
-    int Fcntl(int cmd, ...) override {
-        va_list args;
-        int ret;
-
-        va_start(args, cmd);
-
-        switch (cmd) {
-            case F_SET_RW_HINT: {
-                uint64_t hint = va_arg(args, uint64_t);
-                ret = ::fcntl(fd_, cmd, &hint);
-                break;
-            }
-            default:
-                ret = ::fcntl(fd_, cmd);
-                break;
-        }
-
-        va_end(args);
-        return ret;
-    }
 
  private:
   Status FlushBuffer() {
@@ -942,8 +900,7 @@ class SingletonEnv {
 #endif  // !defined(NDEBUG)
     static_assert(sizeof(env_storage_) >= sizeof(EnvType),
                   "env_storage_ will not fit the Env");
-    static_assert(std::is_standard_layout<SingletonEnv<EnvType>>::value,
-            "SingletonEnv<EnvType> is not a standard layout type");
+    static_assert(std::is_standard_layout_v<SingletonEnv<EnvType>>);
     static_assert(
         offsetof(SingletonEnv<EnvType>, env_storage_) % alignof(EnvType) == 0,
         "env_storage_ does not meet the Env's alignment needs");

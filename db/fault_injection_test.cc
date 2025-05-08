@@ -114,7 +114,6 @@ class TestWritableFile : public WritableFile {
   Status Close() override;
   Status Flush() override;
   Status Sync() override;
-  int Fcntl(int cmd, ...) override;
 
  private:
   FileState state_;

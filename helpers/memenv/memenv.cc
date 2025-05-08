@@ -177,8 +177,6 @@ class SequentialFileImpl : public SequentialFile {
     return Status::OK();
   }
 
-    int Fcntl(int cmd, ...) override { return 0; }
-
  private:
   FileState* file_;
   uint64_t pos_;
@@ -210,7 +208,6 @@ class WritableFileImpl : public WritableFile {
   Status Close() override { return Status::OK(); }
   Status Flush() override { return Status::OK(); }
   Status Sync() override { return Status::OK(); }
-  int Fcntl(int cmd, ...) override { return 0; }
 
  private:
   FileState* file_;

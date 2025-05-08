@@ -193,8 +193,6 @@ class WindowsSequentialFile : public SequentialFile {
     return Status::OK();
   }
 
-    int Fcntl(int cmd, ...) override { return 0; }
-
  private:
   const ScopedHandle handle_;
   const std::string filename_;
@@ -326,10 +324,6 @@ class WindowsWritableFile : public WritableFile {
     }
     return Status::OK();
   }
-
-    int Fcntl(int cmd, ...) override {
-        return 0;
-    }
 
  private:
   Status FlushBuffer() {
