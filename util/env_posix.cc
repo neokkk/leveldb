@@ -404,17 +404,19 @@ class PosixWritableFile final : public WritableFile {
     return status;
   }
 
+#define ALIGN 4096
+
   Status WriteUnbuffered(const char* data, size_t size) {
     void *buf;
 
     if (IsODirect()) {
         printf("It is direct I/O mode. it needs memory allocation to 4096\n");
-        posix_memalign(&buf, 4096, size);
+        posix_memalign(&buf, ALIGN, size);
         memcpy(buf, data, size);
     }
 
     while (size > 0) {
-      ssize_t write_result = ::write(fd_, data, size);
+      ssize_t write_result = ::pwrite(fd_, data, ALIGN, 0);
       if (write_result < 0) {
         if (errno == EINTR) {
           continue;  // Retry
