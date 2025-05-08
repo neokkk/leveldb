@@ -305,6 +305,7 @@ class PosixWritableFile final : public WritableFile {
         dirname_(Dirname(filename_)) {
         int flags = fcntl(fd, F_GETFL);
         if (flags & O_DIRECT) {
+            printf("%s uses direct I/O\n", filename);
             is_odirect_ = true;
         }
     }
@@ -409,14 +410,18 @@ class PosixWritableFile final : public WritableFile {
   Status WriteUnbuffered(const char* data, size_t size) {
     void *buf;
 
-    if (IsODirect()) {
-        printf("It is direct I/O mode. it needs memory allocation to 4096\n");
+    if (is_odirect_) {
         posix_memalign(&buf, ALIGN, size);
         memcpy(buf, data, size);
     }
 
     while (size > 0) {
-      ssize_t write_result = ::pwrite(fd_, data, ALIGN, 0);
+      ssize_t write_result = 0;
+        if (is_odirect_) {
+            write_result = ::pwrite(fd_, buf, ALIGN, 0);
+        } else {
+            write_result = ::write(fd_, data, size);
+        }
       if (write_result < 0) {
         if (errno == EINTR) {
           continue;  // Retry
