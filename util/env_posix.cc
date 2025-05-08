@@ -303,11 +303,6 @@ class PosixWritableFile final : public WritableFile {
         is_manifest_(IsManifest(filename)),
         filename_(std::move(filename)),
         dirname_(Dirname(filename_)) {
-        int flags = fcntl(fd, F_GETFL);
-        if (flags & O_DIRECT) {
-            printf("%s uses direct I/O\n", filename);
-            is_odirect_ = true;
-        }
     }
 
   ~PosixWritableFile() override {
@@ -408,20 +403,9 @@ class PosixWritableFile final : public WritableFile {
 #define ALIGN 4096
 
   Status WriteUnbuffered(const char* data, size_t size) {
-    void *buf;
-
-    if (is_odirect_) {
-        posix_memalign(&buf, ALIGN, size);
-        memcpy(buf, data, size);
-    }
-
     while (size > 0) {
       ssize_t write_result = 0;
-        if (is_odirect_) {
-            write_result = ::pwrite(fd_, buf, ALIGN, 0);
-        } else {
-            write_result = ::write(fd_, data, size);
-        }
+		write_result = ::write(fd_, data, size);
       if (write_result < 0) {
         if (errno == EINTR) {
           continue;  // Retry

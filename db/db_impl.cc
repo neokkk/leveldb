@@ -107,7 +107,7 @@ Options SanitizeOptions(const std::string& dbname,
     // Open a log file in the same directory as the db
     src.env->CreateDir(dbname);  // In case it does not exist
     src.env->RenameFile(InfoLogFileName(dbname), OldInfoLogFileName(dbname));
-    Status s = src.env->NewLogger(InfoLogFileName(dbname), &result.info_log, O_DIRECT);
+    Status s = src.env->NewLogger(InfoLogFileName(dbname), &result.info_log);
     if (!s.ok()) {
       // No place suitable for logging
       result.info_log = nullptr;
@@ -821,7 +821,7 @@ Status DBImpl::OpenCompactionOutputFile(CompactionState* compact) {
 
   // Make the output file
   std::string fname = TableFileName(dbname_, file_number);
-  Status s = env_->NewWritableFile(fname, &compact->outfile, O_DIRECT);
+  Status s = env_->NewWritableFile(fname, &compact->outfile);
   if (s.ok()) {
     compact->builder = new TableBuilder(options_, compact->outfile);
   }
@@ -1368,7 +1368,7 @@ Status DBImpl::MakeRoomForWrite(bool force) {
       assert(versions_->PrevLogNumber() == 0);
       uint64_t new_log_number = versions_->NewFileNumber();
       WritableFile* lfile = nullptr;
-      s = env_->NewWritableFile(LogFileName(dbname_, new_log_number), &lfile, O_DIRECT);
+      s = env_->NewWritableFile(LogFileName(dbname_, new_log_number), &lfile);
       if (!s.ok()) {
         // Avoid chewing through file number space in a tight loop.
         versions_->ReuseFileNumber(new_log_number);
@@ -1514,7 +1514,7 @@ Status DB::Open(const Options& options, const std::string& dbname, DB** dbptr) {
     uint64_t new_log_number = impl->versions_->NewFileNumber();
     WritableFile* lfile;
     s = options.env->NewWritableFile(LogFileName(dbname, new_log_number),
-                                     &lfile, O_DIRECT);
+                                     &lfile);
     if (s.ok()) {
       edit.SetLogNumber(new_log_number);
       impl->logfile_ = lfile;
