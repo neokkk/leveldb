@@ -302,7 +302,12 @@ class PosixWritableFile final : public WritableFile {
         fd_(fd),
         is_manifest_(IsManifest(filename)),
         filename_(std::move(filename)),
-        dirname_(Dirname(filename_)) {}
+        dirname_(Dirname(filename_)) {
+        int flags = fcntl(fd, F_GETFL);
+        if (flags & O_DIRECT) {
+            is_odirect_ = true;
+        }
+    }
 
   ~PosixWritableFile() override {
     if (fd_ >= 0) {
@@ -400,6 +405,14 @@ class PosixWritableFile final : public WritableFile {
   }
 
   Status WriteUnbuffered(const char* data, size_t size) {
+    void *buf;
+
+    if (IsODirect()) {
+        printf("It is direct I/O mode. it needs memory allocation to 4096\n");
+        posix_memalign(&buf, 4096, size);
+        memcpy(buf, data, size);
+    }
+
     while (size > 0) {
       ssize_t write_result = ::write(fd_, data, size);
       if (write_result < 0) {
@@ -411,6 +424,7 @@ class PosixWritableFile final : public WritableFile {
       data += write_result;
       size -= write_result;
     }
+
     return Status::OK();
   }
 
@@ -496,12 +510,17 @@ class PosixWritableFile final : public WritableFile {
     return Basename(filename).starts_with("MANIFEST");
   }
 
+    const bool IsODirect() const {
+        return is_odirect_;
+    }
+
   // buf_[0, pos_ - 1] contains data to be written to fd_.
   char buf_[kWritableFileBufferSize];
   size_t pos_;
   int fd_;
 
   const bool is_manifest_;  // True if the file's name starts with MANIFEST.
+    bool is_odirect_;
   const std::string filename_;
   const std::string dirname_;  // The directory of filename_.
 };
@@ -614,8 +633,8 @@ class PosixEnv : public Env {
 
   Status NewWritableFile(const std::string& filename,
                          WritableFile** result, int flags) override {
-    int fd = ::open(filename.c_str(),
-                    O_TRUNC | O_WRONLY | O_CREAT | flags | kOpenBaseFlags, 0644);
+    int fd = ::open(filename.c_str(), O_TRUNC | O_WRONLY | O_CREAT | kOpenBaseFlags | flags, 0644);
+
     if (fd < 0) {
       *result = nullptr;
       return PosixError(filename, errno);
