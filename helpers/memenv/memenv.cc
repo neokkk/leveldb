@@ -257,7 +257,7 @@ class InMemoryEnv : public EnvWrapper {
   }
 
   Status NewWritableFile(const std::string& fname,
-                         WritableFile** result) override {
+                         WritableFile** result, int flags = 0) override {
     MutexLock lock(&mutex_);
     FileSystem::iterator it = file_map_.find(fname);
 
@@ -277,7 +277,7 @@ class InMemoryEnv : public EnvWrapper {
   }
 
   Status NewAppendableFile(const std::string& fname,
-                           WritableFile** result) override {
+                           WritableFile** result, int flags = 0) override {
     MutexLock lock(&mutex_);
     FileState** sptr = &file_map_[fname];
     FileState* file = *sptr;
@@ -373,7 +373,7 @@ class InMemoryEnv : public EnvWrapper {
     return Status::OK();
   }
 
-  Status NewLogger(const std::string& fname, Logger** result) override {
+  Status NewLogger(const std::string& fname, Logger** result, int flags = 0) override {
     *result = new NoOpLogger;
     return Status::OK();
   }

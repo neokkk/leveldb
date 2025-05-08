@@ -613,9 +613,9 @@ class PosixEnv : public Env {
   }
 
   Status NewWritableFile(const std::string& filename,
-                         WritableFile** result) override {
+                         WritableFile** result, int flags) override {
     int fd = ::open(filename.c_str(),
-                    O_TRUNC | O_WRONLY | O_CREAT | kOpenBaseFlags, 0644);
+                    O_TRUNC | O_WRONLY | O_CREAT | flags | kOpenBaseFlags, 0644);
     if (fd < 0) {
       *result = nullptr;
       return PosixError(filename, errno);
@@ -626,9 +626,9 @@ class PosixEnv : public Env {
   }
 
   Status NewAppendableFile(const std::string& filename,
-                           WritableFile** result) override {
+                           WritableFile** result, int flags) override {
     int fd = ::open(filename.c_str(),
-                    O_APPEND | O_WRONLY | O_CREAT | kOpenBaseFlags, 0644);
+                    O_APPEND | O_WRONLY | O_CREAT | flags | kOpenBaseFlags, 0644);
     if (fd < 0) {
       *result = nullptr;
       return PosixError(filename, errno);
@@ -756,9 +756,9 @@ class PosixEnv : public Env {
     return Status::OK();
   }
 
-  Status NewLogger(const std::string& filename, Logger** result) override {
+  Status NewLogger(const std::string& filename, Logger** result, int flags = 0) override {
     int fd = ::open(filename.c_str(),
-                    O_APPEND | O_WRONLY | O_CREAT | kOpenBaseFlags, 0644);
+                    O_APPEND | O_WRONLY | O_CREAT | flags | kOpenBaseFlags, 0644);
     if (fd < 0) {
       *result = nullptr;
       return PosixError(filename, errno);

@@ -461,7 +461,7 @@ class WindowsEnv : public Env {
   }
 
   Status NewWritableFile(const std::string& filename,
-                         WritableFile** result) override {
+                         WritableFile** result, int flags = 0) override {
     DWORD desired_access = GENERIC_WRITE;
     DWORD share_mode = 0;  // Exclusive access.
     ScopedHandle handle = ::CreateFileA(
@@ -478,7 +478,7 @@ class WindowsEnv : public Env {
   }
 
   Status NewAppendableFile(const std::string& filename,
-                           WritableFile** result) override {
+                           WritableFile** result, int flags = 0) override {
     DWORD desired_access = FILE_APPEND_DATA;
     DWORD share_mode = 0;  // Exclusive access.
     ScopedHandle handle = ::CreateFileA(
@@ -647,7 +647,7 @@ class WindowsEnv : public Env {
     return Status::OK();
   }
 
-  Status NewLogger(const std::string& filename, Logger** result) override {
+  Status NewLogger(const std::string& filename, Logger** result, int flags = 0) override {
     std::FILE* fp = std::fopen(filename.c_str(), "wN");
     if (fp == nullptr) {
       *result = nullptr;

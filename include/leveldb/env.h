@@ -93,7 +93,7 @@ class LEVELDB_EXPORT Env {
   //
   // The returned file will only be accessed by one thread at a time.
   virtual Status NewWritableFile(const std::string& fname,
-                                 WritableFile** result) = 0;
+                                 WritableFile** result, int flags = 0) = 0;
 
   // Create an object that either appends to an existing file, or
   // writes to a new file (if the file does not exist to begin with).
@@ -108,7 +108,7 @@ class LEVELDB_EXPORT Env {
   // the leveldb implementation) must be prepared to deal with
   // an Env that does not support appending.
   virtual Status NewAppendableFile(const std::string& fname,
-                                   WritableFile** result);
+                                   WritableFile** result, int flags = 0);
 
   // Returns true iff the named file exists.
   virtual bool FileExists(const std::string& fname) = 0;
@@ -208,7 +208,7 @@ class LEVELDB_EXPORT Env {
   virtual Status GetTestDirectory(std::string* path) = 0;
 
   // Create and return a log file for storing informational messages.
-  virtual Status NewLogger(const std::string& fname, Logger** result) = 0;
+  virtual Status NewLogger(const std::string& fname, Logger** result, int flags = 0) = 0;
 
   // Returns the number of micro-seconds since some fixed point in time. Only
   // useful for computing deltas of time.
@@ -351,11 +351,11 @@ class LEVELDB_EXPORT EnvWrapper : public Env {
                              RandomAccessFile** r) override {
     return target_->NewRandomAccessFile(f, r);
   }
-  Status NewWritableFile(const std::string& f, WritableFile** r) override {
-    return target_->NewWritableFile(f, r);
+  Status NewWritableFile(const std::string& f, WritableFile** r, int flags = 0) override {
+    return target_->NewWritableFile(f, r, flags);
   }
-  Status NewAppendableFile(const std::string& f, WritableFile** r) override {
-    return target_->NewAppendableFile(f, r);
+  Status NewAppendableFile(const std::string& f, WritableFile** r, int flags = 0) override {
+    return target_->NewAppendableFile(f, r, flags);
   }
   bool FileExists(const std::string& f) override {
     return target_->FileExists(f);
@@ -392,8 +392,8 @@ class LEVELDB_EXPORT EnvWrapper : public Env {
   Status GetTestDirectory(std::string* path) override {
     return target_->GetTestDirectory(path);
   }
-  Status NewLogger(const std::string& fname, Logger** result) override {
-    return target_->NewLogger(fname, result);
+  Status NewLogger(const std::string& fname, Logger** result, int flags = 0) override {
+    return target_->NewLogger(fname, result, flags);
   }
   uint64_t NowMicros() override { return target_->NowMicros(); }
   void SleepForMicroseconds(int micros) override {
