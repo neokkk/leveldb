@@ -208,6 +208,7 @@ class WritableFileImpl : public WritableFile {
   Status Close() override { return Status::OK(); }
   Status Flush() override { return Status::OK(); }
   Status Sync() override { return Status::OK(); }
+  Status Fcntl(int op = 0, int arg = 0) override { return Status::OK(); }
 
  private:
   FileState* file_;

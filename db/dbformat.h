@@ -74,7 +74,9 @@ struct ParsedInternalKey {
   ParsedInternalKey() {}  // Intentionally left uninitialized (for speed)
   ParsedInternalKey(const Slice& u, const SequenceNumber& seq, ValueType t)
       : user_key(u), sequence(seq), type(t) {}
+
   std::string DebugString() const;
+  std::string ToString() const;
 };
 
 // Return the length of the encoding of "key".
@@ -161,6 +163,7 @@ class InternalKey {
   void Clear() { rep_.clear(); }
 
   std::string DebugString() const;
+  std::string ToString() const;
 };
 
 inline int InternalKeyComparator::Compare(const InternalKey& a,

@@ -4,12 +4,16 @@
 
 #include "db/db_impl.h"
 
+#include <fcntl.h>
+
 #include <algorithm>
 #include <atomic>
 #include <cstdint>
 #include <cstdio>
+#include <iostream>
 #include <set>
 #include <string>
+#include <sstream>
 #include <vector>
 
 #include "db/builder.h"
@@ -222,7 +226,7 @@ void DBImpl::MaybeIgnoreError(Status* s) const {
   }
 }
 
-void DBImpl::RemoveObsoleteFiles() {
+void DBImpl::RemoveObsoleteFiles(int compaction_level = 0) {
   mutex_.AssertHeld();
 
   if (!bg_error_.ok()) {
@@ -240,9 +244,11 @@ void DBImpl::RemoveObsoleteFiles() {
   uint64_t number;
   FileType type;
   std::vector<std::string> files_to_delete;
+
   for (std::string& filename : filenames) {
     if (ParseFileName(filename, &number, &type)) {
       bool keep = true;
+
       switch (type) {
         case kLogFile:
           keep = ((number >= versions_->LogNumber()) ||
@@ -273,8 +279,8 @@ void DBImpl::RemoveObsoleteFiles() {
         if (type == kTableFile) {
           table_cache_->Evict(number);
         }
-        Log(options_.info_log, "Delete type=%d #%lld\n", static_cast<int>(type),
-            static_cast<unsigned long long>(number));
+        Log(options_.info_log, "Delete type=%d #%lld@%d\n", static_cast<int>(type),
+            static_cast<unsigned long long>(number), compaction_level);
       }
     }
   }
@@ -510,6 +516,7 @@ Status DBImpl::WriteLevel0Table(MemTable* mem, VersionEdit* edit,
   meta.number = versions_->NewFileNumber();
   pending_outputs_.insert(meta.number);
   Iterator* iter = mem->NewIterator();
+
   Log(options_.info_log, "Level-0 table #%llu: started",
       (unsigned long long)meta.number);
 
@@ -520,9 +527,11 @@ Status DBImpl::WriteLevel0Table(MemTable* mem, VersionEdit* edit,
     mutex_.Lock();
   }
 
-  Log(options_.info_log, "Level-0 table #%llu: %lld bytes %s",
+  Log(options_.info_log, "Level-0 table #%llu: %lld bytes %s; [%s, %s]",
       (unsigned long long)meta.number, (unsigned long long)meta.file_size,
-      s.ToString().c_str());
+      s.ToString().c_str(), 
+      meta.smallest.ToString().c_str(), meta.largest.ToString().c_str());
+
   delete iter;
   pending_outputs_.erase(meta.number);
 
@@ -751,14 +760,16 @@ void DBImpl::BackgroundCompaction() {
         static_cast<unsigned long long>(f->file_size),
         status.ToString().c_str(), versions_->LevelSummary(&tmp));
   } else {
-    CompactionState* compact = new CompactionState(c);
+    CompactionState *compact = new CompactionState(c);
     status = DoCompactionWork(compact);
     if (!status.ok()) {
       RecordBackgroundError(status);
     }
     CleanupCompaction(compact);
     c->ReleaseInputs();
-    RemoveObsoleteFiles();
+
+    int compaction_level = c->level();
+    RemoveObsoleteFiles(compaction_level);
   }
   delete c;
 
@@ -818,6 +829,8 @@ Status DBImpl::OpenCompactionOutputFile(CompactionState* compact) {
     mutex_.Unlock();
   }
 
+    compact->outfile->Fcntl(F_SET_RW_HINT, RWH_WRITE_LIFE_SHORT);
+
   // Make the output file
   std::string fname = TableFileName(dbname_, file_number);
   Status s = env_->NewWritableFile(fname, &compact->outfile);
@@ -827,8 +840,8 @@ Status DBImpl::OpenCompactionOutputFile(CompactionState* compact) {
   return s;
 }
 
-Status DBImpl::FinishCompactionOutputFile(CompactionState* compact,
-                                          Iterator* input) {
+Status DBImpl::FinishCompactionOutputFile(CompactionState *compact,
+                                          Iterator *input) {
   assert(compact != nullptr);
   assert(compact->outfile != nullptr);
   assert(compact->builder != nullptr);
@@ -847,6 +860,7 @@ Status DBImpl::FinishCompactionOutputFile(CompactionState* compact,
   const uint64_t current_bytes = compact->builder->FileSize();
   compact->current_output()->file_size = current_bytes;
   compact->total_bytes += current_bytes;
+
   delete compact->builder;
   compact->builder = nullptr;
 
@@ -857,38 +871,58 @@ Status DBImpl::FinishCompactionOutputFile(CompactionState* compact,
   if (s.ok()) {
     s = compact->outfile->Close();
   }
+
   delete compact->outfile;
   compact->outfile = nullptr;
 
   if (s.ok() && current_entries > 0) {
     // Verify that the table is usable
-    Iterator* iter =
+    Iterator *iter =
         table_cache_->NewIterator(ReadOptions(), output_number, current_bytes);
     s = iter->status();
     delete iter;
+
     if (s.ok()) {
-      Log(options_.info_log, "Generated table #%llu@%d: %lld keys, %lld bytes",
+      Log(options_.info_log, "Generated table #%llu@%d: %lld keys, %lld bytes; [%s, %s]",
           (unsigned long long)output_number, compact->compaction->level(),
           (unsigned long long)current_entries,
-          (unsigned long long)current_bytes);
+          (unsigned long long)current_bytes,
+          compact->current_output()->smallest.ToString().c_str(),
+          compact->current_output()->largest.ToString().c_str());
     }
   }
   return s;
 }
 
-Status DBImpl::InstallCompactionResults(CompactionState* compact) {
+Status DBImpl::InstallCompactionResults(CompactionState *compact) {
   mutex_.AssertHeld();
-  Log(options_.info_log, "Compacted %d@%d + %d@%d files => %lld bytes",
-      compact->compaction->num_input_files(0), compact->compaction->level(),
-      compact->compaction->num_input_files(1), compact->compaction->level() + 1,
-      static_cast<long long>(compact->total_bytes));
+  auto compaction = compact->compaction;
+  const int level = compaction->level();
+  int num_input_files = compaction->num_input_files(0);
+  std::stringstream ss;
+  ss << "Compacted " << num_input_files << "@" << level;
+  for (int i = 0; i < num_input_files; i++) {
+    auto input_meta = compaction->input(0, i);
+    ss << " [" << input_meta->smallest.ToString() << ", " << input_meta->largest.ToString() << "]";
+  }
+  num_input_files = compaction->num_input_files(1);
+  ss << " + " << num_input_files << "@" << level + 1;
+  for (int i = 0; i < num_input_files; i++) {
+    auto input_meta = compaction->input(1, i);
+    ss << " [" << input_meta->smallest.ToString() << ", " << input_meta->largest.ToString() << "]";
+  }
+  ss << "=> " << static_cast<long long>(compact->total_bytes) << " bytes";
+  Log(options_.info_log, ss.str().c_str());
+  // Log(options_.info_log, "Compacted %d@%d + %d@%d files => %lld bytes; [%lld, %lld] + [%lld, %lld]",
+  //     compaction->num_input_files(0), level,
+  //     compaction->num_input_files(1), level + 1,
+  //     static_cast<long long>(compact->total_bytes));
 
   // Add compaction outputs
-  compact->compaction->AddInputDeletions(compact->compaction->edit());
-  const int level = compact->compaction->level();
+  compaction->AddInputDeletions(compaction->edit());
   for (size_t i = 0; i < compact->outputs.size(); i++) {
     const CompactionState::Output& out = compact->outputs[i];
-    compact->compaction->edit()->AddFile(level + 1, out.number, out.file_size,
+    compaction->edit()->AddFile(level + 1, out.number, out.file_size,
                                          out.smallest, out.largest);
   }
   return versions_->LogAndApply(compact->compaction->edit(), &mutex_);
@@ -906,23 +940,25 @@ Status DBImpl::DoCompactionWork(CompactionState* compact) {
   assert(versions_->NumLevelFiles(compact->compaction->level()) > 0);
   assert(compact->builder == nullptr);
   assert(compact->outfile == nullptr);
+
   if (snapshots_.empty()) {
     compact->smallest_snapshot = versions_->LastSequence();
   } else {
     compact->smallest_snapshot = snapshots_.oldest()->sequence_number();
   }
 
-  Iterator* input = versions_->MakeInputIterator(compact->compaction);
+  Iterator *input = versions_->MakeInputIterator(compact->compaction);
 
   // Release mutex while we're actually doing the compaction work
   mutex_.Unlock();
-
   input->SeekToFirst();
+
   Status status;
   ParsedInternalKey ikey;
   std::string current_user_key;
   bool has_current_user_key = false;
   SequenceNumber last_sequence_for_key = kMaxSequenceNumber;
+
   while (input->Valid() && !shutting_down_.load(std::memory_order_acquire)) {
     // Prioritize immutable compaction work
     if (has_imm_.load(std::memory_order_relaxed)) {
@@ -1051,7 +1087,7 @@ Status DBImpl::DoCompactionWork(CompactionState* compact) {
     RecordBackgroundError(status);
   }
   VersionSet::LevelSummaryStorage tmp;
-  Log(options_.info_log, "compacted to: %s", versions_->LevelSummary(&tmp));
+  Log(options_.info_log, "Compacted to: %s", versions_->LevelSummary(&tmp));
   return status;
 }
 

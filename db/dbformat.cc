@@ -30,10 +30,24 @@ std::string ParsedInternalKey::DebugString() const {
   return ss.str();
 }
 
+std::string ParsedInternalKey::ToString() const {
+  return EscapeString(user_key.ToString());
+}
+
 std::string InternalKey::DebugString() const {
   ParsedInternalKey parsed;
   if (ParseInternalKey(rep_, &parsed)) {
     return parsed.DebugString();
+  }
+  std::ostringstream ss;
+  ss << "(bad)" << EscapeString(rep_);
+  return ss.str();
+}
+
+std::string InternalKey::ToString() const {
+  ParsedInternalKey parsed;
+  if (ParseInternalKey(rep_, &parsed)) {
+    return parsed.ToString();
   }
   std::ostringstream ss;
   ss << "(bad)" << EscapeString(rep_);

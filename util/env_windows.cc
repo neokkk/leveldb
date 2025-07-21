@@ -270,6 +270,8 @@ class WindowsWritableFile : public WritableFile {
 
   ~WindowsWritableFile() override = default;
 
+    Status Fcntl(int op = 0, int arg = 0) override { return Status::OK(); }
+
   Status Append(const Slice& data) override {
     size_t write_size = data.size();
     const char* write_data = data.data();

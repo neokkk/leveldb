@@ -164,6 +164,9 @@ class SpecialEnv : public EnvWrapper {
           : env_(env), base_(base), fname_(fname) {}
 
       ~DataFile() { delete base_; }
+
+        Status Fcntl(int op, int arg) { return base_->Fcntl(op, arg); }
+
       Status Append(const Slice& data) {
         if (env_->no_space_.load(std::memory_order_acquire)) {
           // Drop writes on the floor
@@ -206,8 +209,11 @@ class SpecialEnv : public EnvWrapper {
           return base_->Append(data);
         }
       }
+
       Status Close() { return base_->Close(); }
       Status Flush() { return base_->Flush(); }
+      Status Fcntl(int op, int arg) { return base_->Fcntl(op, arg); }
+
       Status Sync() {
         if (env_->manifest_sync_error_.load(std::memory_order_acquire)) {
           return Status::IOError("simulated sync error");

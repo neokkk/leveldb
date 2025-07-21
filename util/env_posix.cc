@@ -290,6 +290,14 @@ class PosixWritableFile final : public WritableFile {
     }
   }
 
+    Status Fcntl(int op, int arg) override {
+        int ret;
+        if (op > 0) {
+            ret = fcntl(fd_, op, arg);
+        }
+        return Status::OK();
+    }
+
   Status Append(const Slice& data) override {
     size_t write_size = data.size();
     const char* write_data = data.data();

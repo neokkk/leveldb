@@ -97,6 +97,7 @@ class StringSink : public WritableFile {
   Status Close() override { return Status::OK(); }
   Status Flush() override { return Status::OK(); }
   Status Sync() override { return Status::OK(); }
+  Status Fcntl(int op = 0, int arg = 0) override { return Status::OK(); }
 
   Status Append(const Slice& data) override {
     contents_.append(data.data(), data.size());

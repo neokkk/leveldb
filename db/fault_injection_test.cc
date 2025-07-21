@@ -110,10 +110,12 @@ class TestWritableFile : public WritableFile {
   TestWritableFile(const FileState& state, WritableFile* f,
                    FaultInjectionTestEnv* env);
   ~TestWritableFile() override;
+
   Status Append(const Slice& data) override;
   Status Close() override;
   Status Flush() override;
   Status Sync() override;
+  Status Fcntl(int op = 0, int arg = 0) override;
 
  private:
   FileState state_;

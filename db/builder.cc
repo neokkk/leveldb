@@ -2,6 +2,7 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file. See the AUTHORS file for names of contributors.
 
+#include <fcntl.h>
 #include "db/builder.h"
 
 #include "db/dbformat.h"
@@ -27,6 +28,8 @@ Status BuildTable(const std::string& dbname, Env* env, const Options& options,
     if (!s.ok()) {
       return s;
     }
+
+    file->Fcntl(F_SET_RW_HINT, RWH_WRITE_LIFE_SHORT);
 
     TableBuilder* builder = new TableBuilder(options, file);
     meta->smallest.DecodeFrom(iter->key());
